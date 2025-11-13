@@ -1,7 +1,80 @@
 #!/usr/bin/env python3
 """
-Titanicコンペ風データセット - Perished予測モデル v5
-Optunaでハイパーパラメータ最適化
+Titanicコンペ風データセット - Perished予測モデル v5: Optuna最適化版
+
+Overview
+--------
+Optunaを使用したベイズ最適化により、LightGBMとXGBoostのハイパーパラメータを
+自動探索し、最適なモデル設定を見つけることで予測精度の向上を目指します。
+
+Features
+--------
+- **自動ハイパーパラメータ探索**: Optunaによる30試行のベイズ最適化
+- **対象モデル**: LightGBM, XGBoost
+- **最適化指標**: 5-fold cross-validation accuracy
+- **特徴量**: 49個の詳細な特徴量（v3と同じ構成）
+- **リーク込み戦略**: train+test結合によるfullデータセット処理
+
+Optimized Hyperparameters
+--------------------------
+各モデルで以下のハイパーパラメータを最適化:
+- n_estimators: 推定器の数 (500-2000)
+- learning_rate: 学習率 (0.01-0.1, log scale)
+- max_depth: 木の最大深さ (3-10)
+- subsample: サンプリング率 (0.6-1.0)
+- colsample_bytree: 特徴量サンプリング率 (0.6-1.0)
+- その他モデル固有パラメータ (num_leaves, min_child_weight等)
+
+Workflow
+--------
+1. データ読み込み (train.csv, test.csv)
+2. train + test 結合 (leak-inclusive)
+3. 特徴量エンジニアリング (49 features)
+   - Title/Surname/FamilySize/Ticket/Cabin解析
+   - Age/Fare ビニング
+   - 交互作用特徴量 (Sex×Pclass, Title×Pclass等)
+   - Target encoding (leak-inclusive)
+4. Optuna最適化
+   - LightGBM: 30 trials
+   - XGBoost: 30 trials
+5. 最適モデルで学習・予測
+6. アンサンブル (LightGBM 55% + XGBoost 45%)
+7. 予測結果保存 (submission_v5_optuna.csv)
+
+Usage
+-----
+    $ python3 titanic_model_v5_optuna.py
+
+    Output: submission_v5_optuna.csv
+
+Requirements
+------------
+- numpy
+- pandas
+- scikit-learn
+- lightgbm
+- xgboost
+- optuna
+
+Performance
+-----------
+- 最適化により、デフォルト設定比で精度向上が期待される
+- 実行時間: 約5-10分（30 trials × 2 models）
+- v2比較: v2 (0.8462) との比較により最適化効果を評価可能
+
+Notes
+-----
+- Optunaの最適化はランダムシードに依存するため、実行ごとに結果が変わる可能性あり
+- より多くの試行数（n_trials増加）でさらなる改善が見込める
+- 最適化されたパラメータは出力ログに表示される
+
+Author
+------
+Generated for Titanic-style competition with leak-inclusive strategy
+
+Version
+-------
+v5 - Optuna Hyperparameter Optimization
 """
 
 import numpy as np
@@ -148,6 +221,38 @@ print(f"Final feature set: {len(feature_cols)} features")
 print("\n🔍 Optuna: Optimizing LightGBM hyperparameters...")
 
 def objective_lgb(trial):
+    """
+    LightGBM用のOptuna目的関数
+
+    ベイズ最適化により、LightGBMのハイパーパラメータを探索し、
+    5-fold cross-validationのaccuracyを最大化する。
+
+    Parameters
+    ----------
+    trial : optuna.trial.Trial
+        Optunaのトライアルオブジェクト。パラメータ提案に使用。
+
+    Returns
+    -------
+    float
+        5-fold cross-validationの平均accuracy
+
+    Optimized Parameters
+    --------------------
+    - n_estimators: 推定器の数 [500, 2000] (step=100)
+    - learning_rate: 学習率 [0.01, 0.1] (log scale)
+    - max_depth: 木の最大深さ [3, 10]
+    - num_leaves: 葉ノード数 [15, 63]
+    - min_child_samples: 子ノードの最小サンプル数 [5, 30]
+    - subsample: サンプリング率 [0.6, 1.0]
+    - colsample_bytree: 特徴量サンプリング率 [0.6, 1.0]
+
+    Notes
+    -----
+    - 5-fold StratifiedKFoldで評価
+    - random_state=42で再現性を確保
+    - verbose=-1で警告抑制
+    """
     params = {
         'n_estimators': trial.suggest_int('n_estimators', 500, 2000, step=100),
         'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
@@ -177,6 +282,38 @@ print(f"  Best params: {study_lgb.best_params}")
 print("\n🔍 Optuna: Optimizing XGBoost hyperparameters...")
 
 def objective_xgb(trial):
+    """
+    XGBoost用のOptuna目的関数
+
+    ベイズ最適化により、XGBoostのハイパーパラメータを探索し、
+    5-fold cross-validationのaccuracyを最大化する。
+
+    Parameters
+    ----------
+    trial : optuna.trial.Trial
+        Optunaのトライアルオブジェクト。パラメータ提案に使用。
+
+    Returns
+    -------
+    float
+        5-fold cross-validationの平均accuracy
+
+    Optimized Parameters
+    --------------------
+    - n_estimators: 推定器の数 [500, 2000] (step=100)
+    - learning_rate: 学習率 [0.01, 0.1] (log scale)
+    - max_depth: 木の最大深さ [3, 10]
+    - min_child_weight: 子ノードの最小重み [1, 10]
+    - subsample: サンプリング率 [0.6, 1.0]
+    - colsample_bytree: 特徴量サンプリング率 [0.6, 1.0]
+
+    Notes
+    -----
+    - 5-fold StratifiedKFoldで評価
+    - random_state=42で再現性を確保
+    - eval_metric='logloss'で損失関数を指定
+    - verbosity=0で警告抑制
+    """
     params = {
         'n_estimators': trial.suggest_int('n_estimators', 500, 2000, step=100),
         'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
