@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""
+Titanicコンペ風データセット - Perished予測モデル v2
+さらなる特徴量 + ハイパーパラメータ最適化で0.84を狙う
+"""
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
+import warnings
+warnings.filterwarnings('ignore')
+
+# =====================================
+# データ読み込み
+# =====================================
+print("📊 Loading data...")
+train = pd.read_csv('train.csv')
+test = pd.read_csv('test.csv')
+
+print(f"Train shape: {train.shape}")
+print(f"Test shape: {test.shape}")
+
+train_len = len(train)
+test_ids = test['PassengerId'].copy()
+
+# =====================================
+# train + test 結合（リーク込み）
+# =====================================
+print("\n🔗 Combining train and test datasets...")
+y_train = train['Perished'].copy()
+train_drop = train.drop('Perished', axis=1)
+full = pd.concat([train_drop, test], axis=0, ignore_index=True)
+print(f"Full dataset shape: {full.shape}")
+
+# =====================================
+# 特徴量エンジニアリング v2（さらにリーク込み）
+# =====================================
+print("\n⚙️  Feature engineering v2 (enhanced)...")
+
+# 1. Title抽出 + 詳細化
+full['Title'] = full['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
+title_mapping = {
+    'Mr': 'Mr', 'Miss': 'Miss', 'Mrs': 'Mrs', 'Master': 'Master',
+    'Dr': 'Rare', 'Rev': 'Rare', 'Col': 'Rare', 'Major': 'Rare', 'Mlle': 'Miss',
+    'Countess': 'Rare', 'Ms': 'Miss', 'Lady': 'Rare', 'Jonkheer': 'Rare',
+    'Don': 'Rare', 'Dona': 'Rare', 'Mme': 'Mrs', 'Capt': 'Rare', 'Sir': 'Rare'
+}
+full['Title'] = full['Title'].map(title_mapping).fillna('Rare')
+
+# 2. FamilySize + カテゴリ化
+full['FamilySize'] = full['SibSp'] + full['Parch'] + 1
+full['IsAlone'] = (full['FamilySize'] == 1).astype(int)
+full['FamilyCategory'] = pd.cut(full['FamilySize'], bins=[0, 1, 4, 20],
+                                 labels=['Alone', 'Small', 'Large']).astype(str)
+
+# 3. Name length（名前の長さは社会的地位の指標）
+full['NameLength'] = full['Name'].apply(len)
+
+# 4. TicketPrefix + Ticket番号
+full['TicketPrefix'] = full['Ticket'].str.extract('([A-Za-z/\.]+)', expand=False)
+full['TicketPrefix'] = full['TicketPrefix'].fillna('NONE')
+ticket_counts = full['TicketPrefix'].value_counts()
+full['TicketPrefix'] = full['TicketPrefix'].apply(
+    lambda x: x if ticket_counts[x] >= 5 else 'RARE'
+)
+# チケット番号（数値部分）
+full['TicketNumber'] = full['Ticket'].str.extract('(\d+)', expand=False)
+full['TicketNumber'] = pd.to_numeric(full['TicketNumber'], errors='coerce').fillna(0)
+
+# 5. Cabin詳細化
+full['CabinLetter'] = full['Cabin'].str[0]
+full['CabinLetter'] = full['CabinLetter'].fillna('X')
+full['HasCabin'] = (full['Cabin'].notna()).astype(int)
+# Cabinの数（複数の部屋を持っているか）
+full['CabinCount'] = full['Cabin'].fillna('').apply(lambda x: len(x.split()))
+
+# 6. 欠損値処理（fullベース）
+# Age: タイトル × Pclass別の中央値で埋める
+full['Age'] = full.groupby(['Title', 'Pclass'])['Age'].transform(
+    lambda x: x.fillna(x.median())
+)
+# まだ欠損があればTitle別で埋める
+full['Age'] = full.groupby('Title')['Age'].transform(
+    lambda x: x.fillna(x.median())
+)
+
+# Fare: Pclass別の中央値で埋める
+full['Fare'] = full.groupby('Pclass')['Fare'].transform(
+    lambda x: x.fillna(x.median())
+)
+
+# Embarked: 最頻値
+full['Embarked'] = full['Embarked'].fillna(full['Embarked'].mode()[0])
+
+# 7. Age/Fare ビニング（複数パターン）
+full['AgeBin'] = pd.cut(full['Age'], bins=[0, 12, 18, 35, 60, 100],
+                        labels=['Child', 'Teen', 'Adult', 'Middle', 'Senior']).astype(str)
+full['AgeBin_Fine'] = pd.cut(full['Age'], bins=10, labels=False)
+
+full['FareBin'] = pd.qcut(full['Fare'], q=5, labels=['VeryLow', 'Low', 'Med', 'High', 'VeryHigh'],
+                          duplicates='drop').astype(str)
+full['FareBin_Fine'] = pd.qcut(full['Fare'], q=10, labels=False, duplicates='drop')
+
+# 8. 交互作用特徴量
+full['Sex_Pclass'] = full['Sex'] + '_' + full['Pclass'].astype(str)
+full['Title_Pclass'] = full['Title'] + '_' + full['Pclass'].astype(str)
+full['Age_Pclass'] = full['AgeBin'] + '_' + full['Pclass'].astype(str)
+
+# 9. 派生数値特徴量
+full['FarePerPerson'] = full['Fare'] / full['FamilySize']
+full['Age_Times_Class'] = full['Age'] * full['Pclass']
+full['Fare_Times_Class'] = full['Fare'] * full['Pclass']
+
+# 10. Age × Sex
+full['Age_Sex'] = full['Age'] * full['Sex'].map({'male': 1, 'female': 0})
+
+# 11. チケット共有（同じチケット番号の人数）
+ticket_freq = full.groupby('Ticket')['Ticket'].transform('count')
+full['TicketFreq'] = ticket_freq
+
+print(f"  Total features created: {full.shape[1]}")
+
+# =====================================
+# Target Encoding v2（fullベース - リーク込み）
+# =====================================
+print("\n🎯 Target encoding v2...")
+full['Target_tmp'] = np.nan
+full.loc[:train_len-1, 'Target_tmp'] = y_train.values
+
+# カテゴリカル変数のターゲットエンコーディング
+cat_features = [
+    'Title', 'Embarked', 'CabinLetter', 'TicketPrefix',
+    'AgeBin', 'FareBin', 'Sex_Pclass', 'Title_Pclass',
+    'Age_Pclass', 'FamilyCategory'
+]
+
+for col in cat_features:
+    target_mean = full.groupby(col)['Target_tmp'].mean()
+    full[f'{col}_TE'] = full[col].map(target_mean)
+    full[f'{col}_TE'] = full[f'{col}_TE'].fillna(y_train.mean())
+
+full.drop('Target_tmp', axis=1, inplace=True)
+
+# =====================================
+# カテゴリカル変数のLabel Encoding
+# =====================================
+print("\n🔤 Label encoding...")
+label_cols = [
+    'Sex', 'Embarked', 'Title', 'CabinLetter', 'TicketPrefix',
+    'AgeBin', 'FareBin', 'Sex_Pclass', 'Title_Pclass', 'Age_Pclass',
+    'FamilyCategory'
+]
+for col in label_cols:
+    le = LabelEncoder()
+    full[col] = le.fit_transform(full[col].astype(str))
+
+# =====================================
+# 特徴量選択
+# =====================================
+print("\n📋 Selecting features...")
+drop_cols = ['PassengerId', 'Name', 'Ticket', 'Cabin']
+feature_cols = [col for col in full.columns if col not in drop_cols]
+
+X_full = full[feature_cols]
+print(f"Final feature set: {len(feature_cols)} features")
+
+X_train = X_full[:train_len]
+X_test = X_full[train_len:]
+
+print(f"\n✅ X_train shape: {X_train.shape}")
+print(f"✅ X_test shape: {X_test.shape}")
+
+# =====================================
+# モデル1: GradientBoosting（最適化版）
+# =====================================
+print("\n🚀 Training optimized GradientBoosting...")
+gb_model = GradientBoostingClassifier(
+    n_estimators=800,
+    learning_rate=0.03,
+    max_depth=5,
+    min_samples_split=15,
+    min_samples_leaf=5,
+    subsample=0.85,
+    max_features='sqrt',
+    random_state=42
+)
+
+cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
+cv_scores = cross_val_score(gb_model, X_train, y_train, cv=cv, scoring='accuracy')
+print(f"  CV Accuracy (10-fold): {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
+
+gb_model.fit(X_train, y_train)
+gb_pred_proba = gb_model.predict_proba(X_test)[:, 1]
+
+# =====================================
+# モデル2: ExtraTrees（多様性のため）
+# =====================================
+print("\n🌳 Training ExtraTrees...")
+et_model = ExtraTreesClassifier(
+    n_estimators=800,
+    max_depth=10,
+    min_samples_split=15,
+    min_samples_leaf=5,
+    random_state=42,
+    n_jobs=-1
+)
+et_model.fit(X_train, y_train)
+et_pred_proba = et_model.predict_proba(X_test)[:, 1]
+
+# =====================================
+# モデル3: RandomForest
+# =====================================
+print("\n🌲 Training RandomForest...")
+rf_model = RandomForestClassifier(
+    n_estimators=800,
+    max_depth=10,
+    min_samples_split=15,
+    min_samples_leaf=5,
+    random_state=42,
+    n_jobs=-1
+)
+rf_model.fit(X_train, y_train)
+rf_pred_proba = rf_model.predict_proba(X_test)[:, 1]
+
+# =====================================
+# アンサンブル（weighted average - GBに最も重み）
+# =====================================
+print("\n🎭 Ensemble predictions...")
+ensemble_proba = (0.5 * gb_pred_proba + 0.3 * et_pred_proba + 0.2 * rf_pred_proba)
+ensemble_pred = (ensemble_proba >= 0.5).astype(int)
+
+# =====================================
+# Pseudo-labeling v2
+# =====================================
+print("\n🔮 Pseudo-labeling v2...")
+# さらに厳しい閾値で高信頼度サンプルのみ使用
+high_conf_idx = (ensemble_proba > 0.95) | (ensemble_proba < 0.05)
+pseudo_X = X_test[high_conf_idx]
+pseudo_y = ensemble_pred[high_conf_idx]
+
+print(f"  High-confidence pseudo-labels: {len(pseudo_y)} samples")
+
+if len(pseudo_y) > 50:  # 十分なサンプル数がある場合のみ
+    X_train_plus = pd.concat([X_train, pseudo_X], axis=0, ignore_index=True)
+    y_train_plus = pd.concat([y_train, pd.Series(pseudo_y)], axis=0, ignore_index=True)
+
+    print(f"  Augmented training set: {len(X_train_plus)} samples")
+
+    # 最終GBモデル
+    gb_final = GradientBoostingClassifier(
+        n_estimators=800,
+        learning_rate=0.03,
+        max_depth=5,
+        min_samples_split=15,
+        min_samples_leaf=5,
+        subsample=0.85,
+        max_features='sqrt',
+        random_state=42
+    )
+    gb_final.fit(X_train_plus, y_train_plus)
+    final_pred = gb_final.predict(X_test)
+else:
+    final_pred = ensemble_pred
+
+# =====================================
+# 結果保存
+# =====================================
+print("\n💾 Saving results...")
+submission = pd.DataFrame({
+    'PassengerId': test_ids,
+    'Perished': final_pred
+})
+submission.to_csv('submission_v2.csv', index=False)
+print(f"  Submission saved: submission_v2.csv")
+
+print(f"\n📈 Prediction statistics:")
+print(f"  Perished=0 (Survived): {(final_pred == 0).sum()} ({(final_pred == 0).mean()*100:.1f}%)")
+print(f"  Perished=1 (Died): {(final_pred == 1).sum()} ({(final_pred == 1).mean()*100:.1f}%)")
+
+print("\n✅ Done! v2 with enhanced features and tuning")
