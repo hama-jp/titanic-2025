@@ -1,0 +1,83 @@
+============================================================
+Titanic Stacking Ensemble
+LightGBM + XGBoost + CatBoost + ロジスティック回帰
+============================================================
+
+============================================================
+スタッキングアンサンブル開始
+============================================================
+特徴量数: 19
+CV: 5-Fold Stratified
+
+Fold 1:
+  LightGBM... OK
+  XGBoost... OK
+  CatBoost... OK
+  LightGBM Acc: 0.8547
+  XGBoost Acc:  0.8547
+  CatBoost Acc: 0.8547
+
+Fold 2:
+  LightGBM... OK
+  XGBoost... OK
+  CatBoost... OK
+  LightGBM Acc: 0.8708
+  XGBoost Acc:  0.8539
+  CatBoost Acc: 0.8596
+
+Fold 3:
+  LightGBM... OK
+  XGBoost... OK
+  CatBoost... OK
+  LightGBM Acc: 0.7978
+  XGBoost Acc:  0.7809
+  CatBoost Acc: 0.8146
+
+Fold 4:
+  LightGBM... OK
+  XGBoost... OK
+  CatBoost... OK
+  LightGBM Acc: 0.8427
+  XGBoost Acc:  0.8202
+  CatBoost Acc: 0.8315
+
+Fold 5:
+  LightGBM... OK
+  XGBoost... OK
+  CatBoost... OK
+  LightGBM Acc: 0.8427
+  XGBoost Acc:  0.8258
+  CatBoost Acc: 0.8371
+
+============================================================
+ベースモデルのOOFスコア
+============================================================
+LightGBM: Accuracy=0.8418, AUC=0.8821
+XGBoost:  Accuracy=0.8272, AUC=0.8830
+CatBoost: Accuracy=0.8395, AUC=0.8852
+
+============================================================
+メタモデル: ロジスティック回帰
+============================================================
+スタッキング: Accuracy=0.8395, AUC=0.8866
+
+メタモデル係数: LightGBM=1.747, XGBoost=1.330, CatBoost=2.460
+
+============================================================
+v2単体との比較
+============================================================
+v2単体 (LightGBM): 0.8418
+スタッキング:      0.8395
+改善:             -0.22pt
+
+提出ファイル作成: submission_stacking.csv
+予測Perished分布:
+Perished
+0    153
+1    265
+Name: count, dtype: int64
+予測死亡率: 0.634
+
+============================================================
+完了！
+============================================================
