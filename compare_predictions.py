@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""v2.6とv3.0 (Optuna最適化版) の予測を詳細比較"""
+"""v2.6とv2.7 (Optuna最適化版) の予測を詳細比較"""
 
 import pandas as pd
 import numpy as np
 
 # 両方の提出ファイルを読み込み
 v26 = pd.read_csv('submission_restart_v2_6.csv')
-v30 = pd.read_csv('submission_restart_v3_0.csv')
+v27 = pd.read_csv('submission_restart_v2_7.csv')
 
 # PassengerIdが一致することを確認
-assert (v26['PassengerId'] == v30['PassengerId']).all(), "PassengerID mismatch!"
+assert (v26['PassengerId'] == v27['PassengerId']).all(), "PassengerID mismatch!"
 
 # 予測の差分を計算
-diff = np.abs(v26['Perished'] - v30['Perished'])
+diff = np.abs(v26['Perished'] - v27['Perished'])
 
 # 二値化した予測の一致率
 v26_binary = (v26['Perished'] > 0.5).astype(int)
-v30_binary = (v30['Perished'] > 0.5).astype(int)
-agreement = (v26_binary == v30_binary).sum()
-disagreement = (v26_binary != v30_binary).sum()
+v27_binary = (v27['Perished'] > 0.5).astype(int)
+agreement = (v26_binary == v27_binary).sum()
+disagreement = (v26_binary != v27_binary).sum()
 
 print("=" * 70)
-print("v2.6 vs v3.0 (Optuna最適化版) 予測比較")
+print("v2.6 vs v2.7 (Optuna最適化版) 予測比較")
 print("=" * 70)
 print()
 
@@ -41,21 +41,21 @@ print()
 
 print("【予測死亡率】")
 print(f"  v2.6: {v26_binary.sum()}/{len(v26)} = {v26_binary.sum()/len(v26)*100:.1f}%")
-print(f"  v3.0: {v30_binary.sum()}/{len(v30)} = {v30_binary.sum()/len(v30)*100:.1f}%")
+print(f"  v2.7: {v27_binary.sum()}/{len(v27)} = {v27_binary.sum()/len(v27)*100:.1f}%")
 print()
 
 # 不一致のケースを詳細分析
 if disagreement > 0:
     print("【不一致ケースの詳細分析】")
-    disagreement_mask = v26_binary != v30_binary
+    disagreement_mask = v26_binary != v27_binary
 
-    # v2.6が死亡、v3.0が生存と予測
-    v26_dead_v30_alive = (v26_binary == 1) & (v30_binary == 0)
-    print(f"  v2.6=死亡 & v3.0=生存: {v26_dead_v30_alive.sum()}件")
+    # v2.6が死亡、v2.7が生存と予測
+    v26_dead_v27_alive = (v26_binary == 1) & (v27_binary == 0)
+    print(f"  v2.6=死亡 & v2.7=生存: {v26_dead_v27_alive.sum()}件")
 
-    # v2.6が生存、v3.0が死亡と予測
-    v26_alive_v30_dead = (v26_binary == 0) & (v30_binary == 1)
-    print(f"  v2.6=生存 & v3.0=死亡: {v26_alive_v30_dead.sum()}件")
+    # v2.6が生存、v2.7が死亡と予測
+    v26_alive_v27_dead = (v26_binary == 0) & (v27_binary == 1)
+    print(f"  v2.6=生存 & v2.7=死亡: {v26_alive_v27_dead.sum()}件")
     print()
 
     # 不一致ケースでの確率差分の平均
@@ -79,7 +79,7 @@ if disagreement == 0:
 elif disagreement < len(v26) * 0.05:  # 5%未満
     print(f"⚠️  わずかな差異があります（{disagreement}件、{disagreement/len(v26)*100:.1f}%）")
     print("   → テストセットでは性能差が出る可能性があります")
-    print("   → より単純なv3.0（num_leaves=11）の方が汎化性能が高い可能性")
+    print("   → より単純なv2.7（num_leaves=11）の方が汎化性能が高い可能性")
 else:
     print(f"⚠️  有意な差異があります（{disagreement}件、{disagreement/len(v26)*100:.1f}%）")
     print("   → 両方を提出して比較すべきです")
@@ -87,5 +87,5 @@ else:
 print()
 print("【推奨】")
 print("  両方をKaggleに提出して、Public Leaderboardスコアを比較")
-print("  → より単純なv3.0（num_leaves=11）が勝つ可能性あり 🎯")
+print("  → より単純なv2.7（num_leaves=11）が勝つ可能性あり 🎯")
 print()
