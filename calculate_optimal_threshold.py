@@ -16,11 +16,8 @@ test = pd.read_csv('test.csv')
 print(f"\n訓練データ: {train.shape}")
 print(f"テストデータ: {test.shape}")
 
-# ターゲット変数を先に保存（Perished -> Survived に変換）
-if 'Perished' in train.columns:
-    y = (1 - train['Perished']).copy()
-else:
-    y = train['Survived'].copy()
+# ターゲット変数を先に保存
+y = train['Perished'].copy()
 
 # 特徴量生成（titanic_optuna_ultra_shallowと同じ）
 def create_features(df):
@@ -98,14 +95,11 @@ for col in categorical_features:
     X_test[col] = X_test[col].astype('category')
 
 print("\n" + "=" * 80)
-print("Embarked別の生存率（訓練データ）")
+print("Embarked別の死亡率（訓練データ）")
 print("=" * 80)
-# yとEmbarkedを結合して分析
-train_with_target = train.copy()
-train_with_target['Survived'] = y
-embarked_survival = train_with_target.groupby('Embarked')['Survived'].agg(['mean', 'count'])
-embarked_survival.columns = ['Survival Rate', 'Count']
-print(embarked_survival)
+embarked_perished = train.groupby('Embarked')['Perished'].agg(['mean', 'count'])
+embarked_perished.columns = ['Perished Rate', 'Count']
+print(embarked_perished)
 
 print("\n" + "=" * 80)
 print("Embarked の分布比較")
@@ -119,13 +113,13 @@ embarked_comparison = pd.DataFrame({
 })
 print(embarked_comparison)
 
-# 期待生存率の計算
-train_expected_survival = (train_embarked_dist * embarked_survival['Survival Rate']).sum()
-test_expected_survival = (test_embarked_dist * embarked_survival['Survival Rate']).sum()
+# 期待死亡率の計算
+train_expected_perished = (train_embarked_dist * embarked_perished['Perished Rate']).sum()
+test_expected_perished = (test_embarked_dist * embarked_perished['Perished Rate']).sum()
 
-print(f"\n訓練データの期待生存率（Embarked分布ベース）: {train_expected_survival:.4f} ({train_expected_survival*100:.2f}%)")
-print(f"テストデータの期待生存率（Embarked分布ベース）: {test_expected_survival:.4f} ({test_expected_survival*100:.2f}%)")
-print(f"差分: {(test_expected_survival - train_expected_survival):.4f} ({(test_expected_survival - train_expected_survival)*100:.2f}%)")
+print(f"\n訓練データの期待死亡率（Embarked分布ベース）: {train_expected_perished:.4f} ({train_expected_perished*100:.2f}%)")
+print(f"テストデータの期待死亡率（Embarked分布ベース）: {test_expected_perished:.4f} ({test_expected_perished*100:.2f}%)")
+print(f"差分: {(test_expected_perished - train_expected_perished):.4f} ({(test_expected_perished - train_expected_perished)*100:.2f}%)")
 
 # Ultra shallowモデルのベストパラメータで学習
 print("\n" + "=" * 80)
@@ -182,12 +176,13 @@ print("\n" + "=" * 80)
 print("Embarked別の予測確率分布（訓練データ OOF）")
 print("=" * 80)
 
-train_with_target['OOF_Pred'] = oof_predictions
+train_with_pred = train.copy()
+train_with_pred['OOF_Pred'] = oof_predictions
 test_with_pred = test.copy()
 test_with_pred['Test_Pred'] = test_predictions
 
 for embarked in ['C', 'Q', 'S']:
-    train_embarked = train_with_target[train_with_target['Embarked'] == embarked]
+    train_embarked = train_with_pred[train_with_pred['Embarked'] == embarked]
     test_embarked = test_with_pred[test_with_pred['Embarked'] == embarked]
 
     print(f"\n{embarked}:")
@@ -227,12 +222,12 @@ print("\n" + "=" * 80)
 print("Embarked 分布差を考慮した閾値の提案")
 print("=" * 80)
 
-# テストデータの方が生存率が高い傾向があるため、閾値を少し下げる
-# 期待生存率の差分を考慮
-survival_diff = test_expected_survival - train_expected_survival
-adjusted_threshold = best_threshold - survival_diff
+# テストデータの方が死亡率が低い（生存率が高い）傾向があるため、閾値を調整
+# 期待死亡率の差分を考慮
+perished_diff = test_expected_perished - train_expected_perished
+adjusted_threshold = best_threshold + perished_diff
 
-print(f"\n期待生存率の差分: {survival_diff:.4f} ({survival_diff*100:.2f}%)")
+print(f"\n期待死亡率の差分: {perished_diff:.4f} ({perished_diff*100:.2f}%)")
 print(f"調整後の閾値: {adjusted_threshold:.2f}")
 
 # 複数の候補閾値での予測を生成
@@ -244,24 +239,25 @@ candidate_thresholds = [0.47, 0.48, 0.49, 0.50, adjusted_threshold]
 candidate_thresholds = sorted(list(set([round(t, 2) for t in candidate_thresholds if 0.4 <= t <= 0.6])))
 
 for threshold in candidate_thresholds:
-    predictions = (test_predictions >= threshold).astype(int)
-    predicted_survival_rate = predictions.mean()
+    # モデルは Perished を直接予測
+    perished_predictions = (test_predictions >= threshold).astype(int)
+    predicted_perished_rate = perished_predictions.mean()
 
     output = pd.DataFrame({
         'PassengerId': test_with_pred['PassengerId'],
-        'Survived': predictions
+        'Perished': perished_predictions
     })
 
     filename = f'submission_threshold_{threshold:.2f}.csv'
     output.to_csv(filename, index=False)
 
-    print(f"✓ Threshold {threshold:.2f}: 予測生存率 {predicted_survival_rate:.4f} ({predicted_survival_rate*100:.2f}%) -> {filename}")
+    print(f"✓ Threshold {threshold:.2f}: 予測死亡率 {predicted_perished_rate:.4f} ({predicted_perished_rate*100:.2f}%) -> {filename}")
 
 print("\n" + "=" * 80)
 print("推奨事項")
 print("=" * 80)
-print(f"1. テストデータは Cherbourg が多く（+5.5%）、生存率が高い傾向")
-print(f"2. 期待生存率の差: +{survival_diff*100:.2f}%")
+print(f"1. テストデータは Cherbourg が多く（+5.5%）、死亡率が低い傾向")
+print(f"2. 期待死亡率の差: {perished_diff*100:.2f}%")
 print(f"3. 推奨閾値: {adjusted_threshold:.2f} (0.50 から {(adjusted_threshold-0.5)*100:.2f}% 調整)")
 print(f"4. 複数の閾値で submission を生成したので、すべて試すことを推奨")
 print("=" * 80)
